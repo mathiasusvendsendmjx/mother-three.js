@@ -136,7 +136,6 @@ function animate() {
   // Flatten: keep horizontal move only
   camera.position.y = start.y;
 
-  // Border clamp with simple slide:
   const proposed = camera.position.clone();
 
   let hit = hitXZ(proposed.x, proposed.z);
