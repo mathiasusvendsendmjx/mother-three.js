@@ -60,22 +60,22 @@ gltfLoader.load("/models/nav.gltf", (gltf) => {
 
 /* ---------- Controls ---------- */
 const controls = new FirstPersonControls(camera, renderer.domElement);
-const BASE_SPEED = 20;
-const RUN_MULT = 2.5;
+const BASE_SPEED = 30;
+const RUN_MULT = 2;
+
+const BASE_LOOK = 0.5;         // <— use this, glide scales it
+const GLIDE_TAU = 0.12;        // <— seconds; smaller = shorter glide
+const GLIDE_MIN_ACTIVE = 0.02; // <— below this we disable look
 
 controls.movementSpeed = BASE_SPEED; // m/s
-controls.lookSpeed = 0.5;
+controls.lookSpeed = BASE_LOOK;
 controls.lookVertical = true;
 controls.constrainVertical = false;
 
-// only look when the mouse is moving (tiny glide)
-controls.activeLook = false;
-let lastMoveTime = 0;
-let glideTimer = 0;
-const MOUSE_IDLE_DELAY = 0.2;
-
+// --- Smooth exponential glide (replaces timer-y version) ---
+let lookGain = 0; // 0..1
 document.addEventListener("mousemove", () => {
-  lastMoveTime = performance.now() / 1000;
+  lookGain = 1; // instant “charge” on mouse move
 });
 
 /* Shift to run */
@@ -101,25 +101,24 @@ function hitXZ(x, z) {
   return h.length ? h[0].point : null;
 }
 
-/* ---------- Animate (no border jitter) ---------- */
+/* ---------- Animate (no border jitter; smooth glide) ---------- */
 const clock = new THREE.Clock();
 let targetY = camera.position.y;
 
 function animate() {
-  const dt = clock.getDelta();
+  // clamp dt so decay stays stable if tab inactive
+  const dt = Math.min(clock.getDelta(), 0.05);
 
-  // Enable look while mouse is moving (with tiny after-glide)
-  const now = performance.now() / 1000;
-  const since = now - lastMoveTime;
-  if (since < MOUSE_IDLE_DELAY) {
-    controls.activeLook = true;
-    glideTimer = MOUSE_IDLE_DELAY;
-  } else if (glideTimer > 0) {
-    controls.activeLook = true;
-    glideTimer -= dt;
-  } else {
-    controls.activeLook = false;
+  // Exponential decay of lookGain toward 0
+  // after ~3*GLIDE_TAU it’s ~95% faded
+  if (lookGain > 0) {
+    lookGain *= Math.exp(-dt / GLIDE_TAU);
+    if (lookGain < 1e-4) lookGain = 0;
   }
+
+  // Drive look from gain: scale lookSpeed & toggle activeLook near-zero
+  controls.lookSpeed = BASE_LOOK * lookGain;
+  controls.activeLook = lookGain > GLIDE_MIN_ACTIVE;
 
   // no flying
   controls._moveUp = false;
