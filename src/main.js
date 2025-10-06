@@ -14,10 +14,10 @@ const camera = new THREE.PerspectiveCamera(
   2000
 );
 const EYE_HEIGHT = 10.0;
-camera.position.set(-140, EYE_HEIGHT, 100);
+camera.position.set(140, EYE_HEIGHT, -100);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(1.5); // stable frame time (tweak 1.25–1.75)
+renderer.setPixelRatio(1.5); // stable frame time
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
@@ -46,7 +46,6 @@ gltfLoader.load("/models/nav.gltf", (gltf) => {
     if (o.isMesh && o.material) {
       o.material.transparent = true;
       o.material.opacity = 0; // invisible but raycastable
-      // o.visible = true; // keep visible=true for raycaster
     }
   });
   navMesh.scale.set(5, 5, 5);
@@ -61,25 +60,27 @@ gltfLoader.load("/models/nav.gltf", (gltf) => {
   if (h) camera.position.set(h.x, h.y + EYE_HEIGHT, h.z);
 });
 
-/* ---------- Controls (delta-time movement) ---------- */
+/* ---------- Controls ---------- */
 const controls = new FirstPersonControls(camera, renderer.domElement);
-const BASE_SPEED = 10;
-const RUN_MULT = 1.8;
+const BASE_SPEED = 20;
+const RUN_MULT = 2.5;
 
 controls.movementSpeed = BASE_SPEED; // m/s
-controls.lookSpeed = 0.08;
+controls.lookSpeed = 0.5;
 controls.lookVertical = true;
 controls.constrainVertical = false;
 
-// Only look when mouse actually moves (prevents “edge-look”)
+// mouse-glide logic
 controls.activeLook = false;
-let mouseMoving = false,
-  lastMoveTime = 0;
+let mouseMoving = false;
+let lastMoveTime = 0;
+let glideTimer = 0;
+const MOUSE_IDLE_DELAY = 0.2;
+
 document.addEventListener("mousemove", () => {
   mouseMoving = true;
   lastMoveTime = performance.now() / 1000;
 });
-const MOUSE_IDLE_DELAY = 0.05;
 
 /* Shift to run */
 let shiftDown = false;
@@ -107,61 +108,64 @@ function hitXZ(x, z) {
   return h.length ? h[0].point : null;
 }
 
-/* ---------- Animate (flatten Y, clamp to nav, slide) ---------- */
+/* ---------- Animate ---------- */
 const clock = new THREE.Clock();
 let lastValid = camera.position.clone();
 let targetY = camera.position.y;
+let frameCount = 0;
 
 function animate() {
   const dt = clock.getDelta();
+  frameCount++;
 
-  // Look only while mouse moves
+  /* --- Mouse-glide look --- */
   const now = performance.now() / 1000;
-  controls.activeLook = mouseMoving;
-  if (mouseMoving && now - lastMoveTime > MOUSE_IDLE_DELAY) {
-    mouseMoving = false;
+  const timeSinceMove = now - lastMoveTime;
+  if (timeSinceMove < 0.2) {
+    controls.activeLook = true;
+    glideTimer = 0.2;
+  } else if (glideTimer > 0) {
+    controls.activeLook = true;
+    glideTimer -= dt;
+  } else {
     controls.activeLook = false;
   }
 
-  // Prevent vertical translate keys (R/F) from flying
+  /* --- Movement --- */
   controls._moveUp = false;
   controls._moveDown = false;
 
-  // Remember start (for edge sliding)
   const start = camera.position.clone();
-
-  // Let FirstPersonControls move/rotate (time-scaled)
   controls.update(dt);
-
-  // Flatten: keep horizontal move only
-  camera.position.y = start.y;
+  camera.position.y = start.y; // flatten Y
 
   const proposed = camera.position.clone();
 
-  let hit = hitXZ(proposed.x, proposed.z);
-  if (!hit) {
-    // try X axis only
-    const tryX = new THREE.Vector3(proposed.x, start.y, start.z);
-    if ((hit = hitXZ(tryX.x, tryX.z))) {
-      camera.position.set(tryX.x, start.y, tryX.z);
-    } else {
-      // try Z axis only
-      const tryZ = new THREE.Vector3(start.x, start.y, proposed.z);
-      if ((hit = hitXZ(tryZ.x, tryZ.z))) {
-        camera.position.set(tryZ.x, start.y, tryZ.z);
+  /* --- Nav clamp every 5th frame --- */
+  let hit = null;
+  if (frameCount % 5 === 0 && navMesh) {
+    hit = hitXZ(proposed.x, proposed.z);
+    if (!hit) {
+      const tryX = new THREE.Vector3(proposed.x, start.y, start.z);
+      if ((hit = hitXZ(tryX.x, tryX.z))) {
+        camera.position.set(tryX.x, start.y, tryX.z);
       } else {
-        // neither valid → revert to last valid
-        camera.position.copy(lastValid);
-        hit = hitXZ(lastValid.x, lastValid.z);
+        const tryZ = new THREE.Vector3(start.x, start.y, proposed.z);
+        if ((hit = hitXZ(tryZ.x, tryZ.z))) {
+          camera.position.set(tryZ.x, start.y, tryZ.z);
+        } else {
+          camera.position.copy(lastValid);
+          hit = hitXZ(lastValid.x, lastValid.z);
+        }
       }
+    }
+    if (hit) {
+      targetY = hit.y + EYE_HEIGHT;
+      lastValid.set(camera.position.x, targetY, camera.position.z);
     }
   }
 
-  // Smoothly glue to nav height (no snap)
-  if (hit) {
-    targetY = hit.y + EYE_HEIGHT;
-    lastValid.set(camera.position.x, targetY, camera.position.z);
-  }
+  /* --- Smooth height glue --- */
   camera.position.y += (targetY - camera.position.y) * 0.18;
 
   renderer.render(scene, camera);
@@ -174,5 +178,5 @@ window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  controls.handleResize(); // keeps mouse look consistent after resize
+  controls.handleResize();
 });
